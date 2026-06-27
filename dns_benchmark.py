@@ -762,6 +762,61 @@ class MainWindow(QMainWindow):
             self.worker.wait()
         event.accept()
 
+# ── App icon (drawn at runtime — no file dependencies) ────────────────────────
+def _make_icon() -> "QIcon":
+    from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QColor, QIcon
+    from PyQt6.QtCore import QRectF
+
+    SZ = 256
+    px = QPixmap(SZ, SZ)
+    px.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Rounded-square background
+    bg = QPainterPath()
+    bg.addRoundedRect(QRectF(2, 2, SZ - 4, SZ - 4), 52, 52)
+    p.fillPath(bg, QColor("#0f111a"))
+
+    # 5 horizontal bars — same provider colours as the chart
+    bars = [
+        ("#f6821f", 0.38),   # Cloudflare
+        ("#7c3aed", 0.50),   # Quad9
+        ("#4285f4", 0.62),   # Google
+        ("#0097d9", 0.75),   # OpenDNS
+        ("#5fb955", 0.88),   # AdGuard
+    ]
+    pad    = 38
+    n      = len(bars)
+    bar_h  = (SZ - 2 * pad) / (n * 1.75)
+    gap    = bar_h * 0.75
+    max_w  = SZ - 2 * pad
+    y      = pad
+
+    for color, frac in bars:
+        w = max_w * frac
+
+        bar_path = QPainterPath()
+        bar_path.addRoundedRect(QRectF(pad, y, w, bar_h), bar_h / 2, bar_h / 2)
+        p.fillPath(bar_path, QColor(color))
+
+        # Diamond marker at the right end of each bar
+        mx, my, dm = pad + w, y + bar_h / 2, bar_h * 0.42
+        diamond = QPainterPath()
+        diamond.moveTo(mx + dm, my)
+        diamond.lineTo(mx,      my - dm)
+        diamond.lineTo(mx - dm, my)
+        diamond.lineTo(mx,      my + dm)
+        diamond.closeSubpath()
+        p.fillPath(diamond, QColor("#ffffff"))
+
+        y += bar_h + gap
+
+    p.end()
+    return QIcon(px)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -769,6 +824,7 @@ if __name__ == "__main__":
     )
     app = QApplication(sys.argv)
     app.setApplicationName("Latensee")
+    app.setWindowIcon(_make_icon())
     apply_dark_theme(app)
     win = MainWindow()
     win.show()

@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPalette, QBrush
+from PyQt6.QtGui import QFont, QColor, QPalette, QBrush, QShortcut, QKeySequence
 
 import matplotlib
 matplotlib.use("QtAgg")
@@ -612,6 +612,8 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready — select servers and click Run Benchmark")
+
+        QShortcut(QKeySequence("F5"), self).activated.connect(self._run)
 
     def _make_card(self, title: str):
         card = QFrame()

@@ -11,6 +11,7 @@ import time
 import platform
 import subprocess
 import ipaddress
+import statistics
 import concurrent.futures
 from datetime import datetime
 from typing import Optional
@@ -64,7 +65,7 @@ PROVIDER_COLORS = {
 
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
 
-TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Loss %", "ICMP ms", "Grade", "Status"]
+TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "Grade", "Status"]
 
 BG0  = "#0b0e1a"   # darkest — window background
 BG1  = "#10141f"   # sidebar / panel
@@ -226,17 +227,19 @@ def benchmark_one(server: dict, domains: list, n: int, timeout: float, do_ping: 
     total   = len(domains) * n
     ping_ms = icmp_ping(server["ip"]) if do_ping else None
     avg     = round(sum(times) / len(times), 1) if times else None
+    jitter  = round(statistics.stdev(times), 1) if len(times) >= 2 else None
     return {
-        "name":     server["name"],
-        "ip":       server["ip"],
-        "provider": server["provider"],
-        "min_ms":   round(min(times), 1) if times else None,
-        "avg_ms":   avg,
-        "max_ms":   round(max(times), 1) if times else None,
-        "loss_pct": round(fail / total * 100, 1),
-        "icmp_ms":  round(ping_ms, 1) if ping_ms is not None else None,
-        "grade":    latency_grade(avg),
-        "status":   "OK" if times else "FAILED",
+        "name":      server["name"],
+        "ip":        server["ip"],
+        "provider":  server["provider"],
+        "min_ms":    round(min(times), 1) if times else None,
+        "avg_ms":    avg,
+        "max_ms":    round(max(times), 1) if times else None,
+        "jitter_ms": jitter,
+        "loss_pct":  round(fail / total * 100, 1),
+        "icmp_ms":   round(ping_ms, 1) if ping_ms is not None else None,
+        "grade":     latency_grade(avg),
+        "status":    "OK" if times else "FAILED",
     }
 
 # ── Background worker ─────────────────────────────────────────────────────────
@@ -381,18 +384,24 @@ class ResultsTable(QTableWidget):
                     it.setForeground(QBrush(QColor(ms_color(val))))
                 self.setItem(row, col, it)
 
+            jitter = r.get("jitter_ms")
+            it = cell(f"{jitter:.1f}" if jitter is not None else "—")
+            if jitter is not None:
+                it.setForeground(QBrush(QColor(ms_color(jitter))))
+            self.setItem(row, 6, it)
+
             loss = r["loss_pct"]
             it = cell(f"{loss:.1f}%")
             it.setForeground(QBrush(QColor(
                 "#4ade80" if loss == 0 else "#fbbf24" if loss < 10 else "#f87171"
             )))
-            self.setItem(row, 6, it)
+            self.setItem(row, 7, it)
 
             icmp = r.get("icmp_ms")
             it = cell(f"{icmp:.1f}" if icmp is not None else "—")
             if icmp is not None:
                 it.setForeground(QBrush(QColor(ms_color(icmp))))
-            self.setItem(row, 7, it)
+            self.setItem(row, 8, it)
 
             grade = r["grade"]
             it = cell(grade)
@@ -400,12 +409,12 @@ class ResultsTable(QTableWidget):
             font = QFont("Consolas", 9)
             font.setBold(True)
             it.setFont(font)
-            self.setItem(row, 8, it)
+            self.setItem(row, 9, it)
 
             status = r["status"]
             it = cell(status)
             it.setForeground(QBrush(QColor("#4ade80" if status == "OK" else "#f87171")))
-            self.setItem(row, 9, it)
+            self.setItem(row, 10, it)
 
         self.setSortingEnabled(True)
         self.sortItems(4, Qt.SortOrder.AscendingOrder)
@@ -562,7 +571,7 @@ class MainWindow(QMainWindow):
         cards_row.setSpacing(8)
         self._cards: dict[str, tuple[QLabel, QLabel]] = {}
         for key, title in [("fastest", "Fastest"), ("ip", "Fastest IP"),
-                            ("median", "Median latency"), ("count", "Tested")]:
+                            ("median", "Median latency"), ("jitter", "Best jitter"), ("count", "Tested")]:
             card, val_lbl, sub_lbl = self._make_card(title)
             cards_row.addWidget(card)
             self._cards[key] = (val_lbl, sub_lbl)
@@ -764,9 +773,13 @@ class MainWindow(QMainWindow):
             fastest = ok[0]
             avgs    = [r["avg_ms"] for r in ok]
             median  = sorted(avgs)[len(avgs) // 2]
+            jitters = [(r["jitter_ms"], r["name"]) for r in ok if r.get("jitter_ms") is not None]
+            best_jitter = min(jitters, key=lambda x: x[0]) if jitters else None
             self._card_set("fastest", fastest["name"],           f"{fastest['avg_ms']:.1f} ms avg")
             self._card_set("ip",      fastest["ip"],             fastest["provider"])
             self._card_set("median",  f"{median:.1f} ms",        f"across {len(ok)} servers")
+            self._card_set("jitter",  f"{best_jitter[0]:.1f} ms" if best_jitter else "—",
+                           best_jitter[1] if best_jitter else "")
             self._card_set("count",   f"{len(ok)} / {len(results)}", f"{len(results)-len(ok)} failed")
             msg = f"Done — fastest: {fastest['name']} ({fastest['avg_ms']:.1f} ms avg)"
         else:

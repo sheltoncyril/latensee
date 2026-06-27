@@ -592,6 +592,12 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self._export_csv)
         bot.addWidget(self.export_btn)
 
+        self.png_btn = QPushButton("Export PNG")
+        self.png_btn.setFixedHeight(36)
+        self.png_btn.setEnabled(False)
+        self.png_btn.clicked.connect(self._export_png)
+        bot.addWidget(self.png_btn)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -710,6 +716,7 @@ class MainWindow(QMainWindow):
         self.results = []
         self.run_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
+        self.png_btn.setEnabled(False)
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self.table.setRowCount(0)
@@ -765,6 +772,7 @@ class MainWindow(QMainWindow):
 
         self.run_btn.setEnabled(True)
         self.export_btn.setEnabled(bool(ok))
+        self.png_btn.setEnabled(bool(ok))
         self.progress.setVisible(False)
         self.status_bar.showMessage(msg)
 
@@ -779,6 +787,16 @@ class MainWindow(QMainWindow):
         if path:
             pd.DataFrame(self.results).to_csv(path, index=False)
             self.status_bar.showMessage(f"Saved: {path}")
+
+    def _export_png(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Chart",
+            f"latensee_{datetime.now():%Y%m%d_%H%M%S}.png",
+            "PNG images (*.png)",
+        )
+        if path:
+            self.chart.fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=BG0)
+            self.status_bar.showMessage(f"Chart saved: {path}")
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():

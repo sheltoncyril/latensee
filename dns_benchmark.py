@@ -39,21 +39,29 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BUILTIN_SERVERS = [
-    {"name": "Cloudflare",   "ip": "1.1.1.1",         "provider": "Cloudflare", "note": "Privacy-focused · fastest"},
-    {"name": "Cloudflare 2", "ip": "1.0.0.1",         "provider": "Cloudflare", "note": "Secondary"},
-    {"name": "Google",       "ip": "8.8.8.8",         "provider": "Google",     "note": "Most widely used"},
-    {"name": "Google 2",     "ip": "8.8.4.4",         "provider": "Google",     "note": "Secondary"},
-    {"name": "Quad9",        "ip": "9.9.9.9",         "provider": "Quad9",      "note": "Malware blocking"},
-    {"name": "Quad9 2",      "ip": "149.112.112.112", "provider": "Quad9",      "note": "Secondary"},
-    {"name": "OpenDNS",      "ip": "208.67.222.222",  "provider": "OpenDNS",    "note": "Phishing protection"},
-    {"name": "OpenDNS 2",    "ip": "208.67.220.220",  "provider": "OpenDNS",    "note": "Secondary"},
-    {"name": "AdGuard",      "ip": "94.140.14.14",    "provider": "AdGuard",    "note": "Ad & tracker blocking"},
-    {"name": "AdGuard 2",    "ip": "94.140.15.15",    "provider": "AdGuard",    "note": "Secondary"},
-    {"name": "Comodo",       "ip": "8.26.56.26",      "provider": "Comodo",     "note": "Security filtering"},
-    {"name": "Comodo 2",     "ip": "8.20.247.20",     "provider": "Comodo",     "note": "Secondary"},
-    {"name": "Level3",       "ip": "4.2.2.1",         "provider": "Level3",     "note": "ISP-grade"},
-    {"name": "Verisign",     "ip": "64.6.64.6",       "provider": "Verisign",   "note": "No filtering"},
-    {"name": "NextDNS",      "ip": "45.90.28.0",      "provider": "NextDNS",    "note": "Customizable filtering"},
+    # ── IPv4 ──────────────────────────────────────────────────────────────────
+    {"name": "Cloudflare",      "ip": "1.1.1.1",                   "provider": "Cloudflare", "note": "Privacy-focused · fastest"},
+    {"name": "Cloudflare 2",    "ip": "1.0.0.1",                   "provider": "Cloudflare", "note": "Secondary"},
+    {"name": "Google",          "ip": "8.8.8.8",                   "provider": "Google",     "note": "Most widely used"},
+    {"name": "Google 2",        "ip": "8.8.4.4",                   "provider": "Google",     "note": "Secondary"},
+    {"name": "Quad9",           "ip": "9.9.9.9",                   "provider": "Quad9",      "note": "Malware blocking"},
+    {"name": "Quad9 2",         "ip": "149.112.112.112",           "provider": "Quad9",      "note": "Secondary"},
+    {"name": "OpenDNS",         "ip": "208.67.222.222",            "provider": "OpenDNS",    "note": "Phishing protection"},
+    {"name": "OpenDNS 2",       "ip": "208.67.220.220",            "provider": "OpenDNS",    "note": "Secondary"},
+    {"name": "AdGuard",         "ip": "94.140.14.14",              "provider": "AdGuard",    "note": "Ad & tracker blocking"},
+    {"name": "AdGuard 2",       "ip": "94.140.15.15",              "provider": "AdGuard",    "note": "Secondary"},
+    {"name": "Comodo",          "ip": "8.26.56.26",                "provider": "Comodo",     "note": "Security filtering"},
+    {"name": "Comodo 2",        "ip": "8.20.247.20",               "provider": "Comodo",     "note": "Secondary"},
+    {"name": "Level3",          "ip": "4.2.2.1",                   "provider": "Level3",     "note": "ISP-grade"},
+    {"name": "Verisign",        "ip": "64.6.64.6",                 "provider": "Verisign",   "note": "No filtering"},
+    {"name": "NextDNS",         "ip": "45.90.28.0",                "provider": "NextDNS",    "note": "Customizable filtering"},
+    # ── IPv6 ──────────────────────────────────────────────────────────────────
+    {"name": "Cloudflare v6",   "ip": "2606:4700:4700::1111",      "provider": "Cloudflare", "note": "IPv6 · primary",   "ipv6": True},
+    {"name": "Cloudflare v6 2", "ip": "2606:4700:4700::1001",      "provider": "Cloudflare", "note": "IPv6 · secondary", "ipv6": True},
+    {"name": "Google v6",       "ip": "2001:4860:4860::8888",      "provider": "Google",     "note": "IPv6 · primary",   "ipv6": True},
+    {"name": "Google v6 2",     "ip": "2001:4860:4860::8844",      "provider": "Google",     "note": "IPv6 · secondary", "ipv6": True},
+    {"name": "Quad9 v6",        "ip": "2620:fe::fe",               "provider": "Quad9",      "note": "IPv6 · primary",   "ipv6": True},
+    {"name": "AdGuard v6",      "ip": "2a10:50c0::ad1:ff",         "provider": "AdGuard",    "note": "IPv6 · primary",   "ipv6": True},
 ]
 
 DEFAULT_DOMAINS = ["google.com", "cloudflare.com", "github.com", "amazon.com", "youtube.com"]
@@ -219,10 +227,13 @@ def query_doh(ip: str, domain: str, timeout: float) -> Optional[float]:
 
 
 def icmp_ping(ip: str) -> Optional[float]:
+    is_v6 = ":" in ip
     if platform.system() == "Windows":
-        cmd, pattern = ["ping", "-n", "4", "-w", "2000", ip], r"Average\s*=\s*(\d+)ms"
+        flag = ["-6"] if is_v6 else []
+        cmd, pattern = ["ping"] + flag + ["-n", "4", "-w", "2000", ip], r"Average\s*=\s*(\d+)ms"
     else:
-        cmd, pattern = ["ping", "-c", "4", "-W", "2", ip], r"\d+\.?\d*/(\d+\.?\d*)/\d+\.?\d*"
+        cmd_name = "ping6" if is_v6 else "ping"
+        cmd, pattern = [cmd_name, "-c", "4", "-W", "2", ip], r"\d+\.?\d*/(\d+\.?\d*)/\d+\.?\d*"
     try:
         kwargs: dict = {"stderr": subprocess.DEVNULL, "text": True, "timeout": 15}
         if platform.system() == "Windows":
@@ -686,6 +697,12 @@ class MainWindow(QMainWindow):
         self.bust_chk.setChecked(True)
         self.bust_chk.setToolTip("Prepend random prefix to domains to bypass resolver cache")
         sg2.addRow("", self.bust_chk)
+
+        self.ipv6_chk = QCheckBox("Show IPv6 servers")
+        self.ipv6_chk.setChecked(False)
+        self.ipv6_chk.setToolTip("Include IPv6 resolver addresses (requires IPv6 connectivity)")
+        self.ipv6_chk.toggled.connect(self._toggle_ipv6_servers)
+        sg2.addRow("", self.ipv6_chk)
         ll.addWidget(set_grp)
 
         ll.addStretch()
@@ -872,6 +889,20 @@ class MainWindow(QMainWindow):
                     "name": f"System DNS  {ip}", "ip": ip,
                     "provider": "System", "note": "Your current system resolver",
                 })
+
+    def _toggle_ipv6_servers(self, enabled: bool):
+        ipv6_servers = [s for s in BUILTIN_SERVERS if s.get("ipv6")]
+        ipv6_ips     = {s["ip"] for s in ipv6_servers}
+        if enabled:
+            for s in ipv6_servers:
+                if s["ip"] not in {sv["ip"] for sv in self.servers}:
+                    self.servers.append(s.copy())
+                    self._add_server_row(s.copy())
+        else:
+            to_remove = [(s, c) for s, c in self._checkboxes if s["ip"] in ipv6_ips]
+            for s, c in to_remove:
+                row = c.parent()
+                self._remove_server(s, row, c)
 
     # ── Benchmark flow ────────────────────────────────────────────────────────
     def _run(self):

@@ -8,12 +8,14 @@ Build: pyinstaller --onefile --windowed dns_benchmark.py
 import sys
 import re
 import time
+import json
 import platform
 import subprocess
 import ipaddress
 import statistics
 import concurrent.futures
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import dns.resolver
@@ -66,6 +68,9 @@ PROVIDER_COLORS = {
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
 
 TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "Grade", "Status"]
+
+HISTORY_FILE = Path.home() / ".latensee" / "history.json"
+HISTORY_MAX  = 20
 
 BG0  = "#0b0e1a"   # darkest — window background
 BG1  = "#10141f"   # sidebar / panel
@@ -293,7 +298,8 @@ class DNSChart(FigureCanvasQTAgg):
         ax.grid(axis="x", color=BG3, linewidth=0.6, zorder=0)
         ax.set_axisbelow(True)
 
-    def update_chart(self, results: list, show_icmp: bool) -> None:
+    def update_chart(self, results: list, show_icmp: bool,
+                     prev_results: Optional[list] = None) -> None:
         self.ax.clear()
         self._decorate()
         ok = [r for r in results if r["status"] == "OK"]
@@ -310,6 +316,16 @@ class DNSChart(FigureCanvasQTAgg):
         maxs  = [r["max_ms"]  for r in rows]
         clrs  = [PROVIDER_COLORS.get(r["provider"], "#888") for r in rows]
         lbls  = [f"{r['name']}  {r['ip']}" for r in rows]
+
+        # Previous run comparison bars (faded)
+        prev_map: dict = {}
+        if prev_results:
+            prev_map = {r["ip"]: r["avg_ms"] for r in prev_results if r.get("avg_ms")}
+        for i, r in enumerate(rows):
+            pv = prev_map.get(r["ip"])
+            if pv is not None:
+                self.ax.barh(i, pv, height=0.25, color=clrs[i], alpha=0.28,
+                             zorder=1, label="_nolegend_")
 
         # Min–max range bands
         for i, (mn, mx, c) in enumerate(zip(mins, maxs, clrs)):
@@ -331,15 +347,21 @@ class DNSChart(FigureCanvasQTAgg):
             )
 
         # ICMP markers
+        legend_handles = []
         if show_icmp:
             ix = [(i, r["icmp_ms"]) for i, r in enumerate(rows) if r["icmp_ms"] is not None]
             if ix:
                 iy, iv = zip(*ix)
-                self.ax.scatter(iv, iy, marker="D", s=35, color="#e2e8f0",
-                                zorder=3, label="ICMP ping", linewidths=0.5,
-                                edgecolors="#94a3b8")
-                self.ax.legend(loc="lower right", facecolor=BG3, edgecolor=LINE,
-                               labelcolor="#94a3b8", fontsize=8.5, framealpha=0.9)
+                sc = self.ax.scatter(iv, iy, marker="D", s=35, color="#e2e8f0",
+                                     zorder=3, linewidths=0.5, edgecolors="#94a3b8")
+                legend_handles.append((sc, "ICMP ping"))
+        if prev_map:
+            import matplotlib.patches as mpatches
+            legend_handles.append((mpatches.Patch(color="#94a3b8", alpha=0.35), "prev run"))
+        if legend_handles:
+            self.ax.legend([h for h, _ in legend_handles], [l for _, l in legend_handles],
+                           loc="lower right", facecolor=BG3, edgecolor=LINE,
+                           labelcolor="#94a3b8", fontsize=8.5, framealpha=0.9)
 
         self.ax.set_yticks(list(ypos))
         self.ax.set_yticklabels(lbls, fontfamily="Consolas", fontsize=9)
@@ -453,14 +475,66 @@ class AddServerDialog(QDialog):
         return {"name": self.name_edit.text().strip() or ip,
                 "ip": ip, "provider": "Custom", "note": ""}
 
+# ── History helpers ───────────────────────────────────────────────────────────
+def _load_history() -> list:
+    try:
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def _save_history(results: list) -> None:
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        runs = _load_history()
+        runs.append({"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "results": results})
+        runs = runs[-HISTORY_MAX:]
+        HISTORY_FILE.write_text(json.dumps(runs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+class HistoryDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Benchmark History")
+        self.setMinimumSize(360, 400)
+        self.selected_results = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        from PyQt6.QtWidgets import QListWidget
+        self.list_widget = QListWidget()
+        self.list_widget.setFont(QFont("Consolas", 9))
+        self.list_widget.setStyleSheet(f"background: {BG2}; border: 1px solid {LINE}; border-radius: 4px;")
+        self._runs = _load_history()
+        for run in reversed(self._runs):
+            n_ok = sum(1 for r in run["results"] if r.get("status") == "OK")
+            self.list_widget.addItem(f"{run['timestamp']}  ({n_ok} servers OK)")
+        layout.addWidget(self.list_widget)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept(self):
+        idx = self.list_widget.currentRow()
+        if idx < 0:
+            return
+        run_idx = len(self._runs) - 1 - idx
+        self.selected_results = self._runs[run_idx]["results"]
+        self.accept()
+
 # ── Main window ───────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Latensee")
         self.resize(1240, 800)
-        self.servers     = [s.copy() for s in BUILTIN_SERVERS]
-        self.results     = []
+        self.servers      = [s.copy() for s in BUILTIN_SERVERS]
+        self.results      = []
+        self.prev_results: Optional[list] = None
         self.worker: Optional[BenchmarkWorker] = None
         self._checkboxes: list[tuple[dict, QCheckBox]] = []
         self._build_ui()
@@ -606,6 +680,11 @@ class MainWindow(QMainWindow):
         self.png_btn.setEnabled(False)
         self.png_btn.clicked.connect(self._export_png)
         bot.addWidget(self.png_btn)
+
+        self.history_btn = QPushButton("History")
+        self.history_btn.setFixedHeight(36)
+        self.history_btn.clicked.connect(self._show_history)
+        bot.addWidget(self.history_btn)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -760,12 +839,13 @@ class MainWindow(QMainWindow):
     def _on_server_done(self, result: dict):
         self.results.append(result)
         partial = sorted(self.results, key=lambda r: (r["avg_ms"] is None, r["avg_ms"] or 9999))
-        self.chart.update_chart(partial, self.ping_chk.isChecked())
+        self.chart.update_chart(partial, self.ping_chk.isChecked(), self.prev_results)
 
     def _on_all_done(self, results: list):
         self.results = results
         show_icmp = self.ping_chk.isChecked()
-        self.chart.update_chart(results, show_icmp)
+        self.chart.update_chart(results, show_icmp, self.prev_results)
+        _save_history(results)
         self.table.populate(results)
 
         ok = [r for r in results if r["status"] == "OK"]
@@ -790,6 +870,15 @@ class MainWindow(QMainWindow):
         self.png_btn.setEnabled(bool(ok))
         self.progress.setVisible(False)
         self.status_bar.showMessage(msg)
+
+    def _show_history(self):
+        dlg = HistoryDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.selected_results is None:
+            return
+        self.prev_results = dlg.selected_results
+        if self.results:
+            self.chart.update_chart(self.results, self.ping_chk.isChecked(), self.prev_results)
+        self.status_bar.showMessage("Previous run loaded — run benchmark to compare")
 
     def _export_csv(self):
         if not self.results:

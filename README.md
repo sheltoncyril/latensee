@@ -4,6 +4,8 @@
 
 **See your DNS latency in real time.** A fast, standalone desktop app that benchmarks public DNS resolvers and helps you pick the fastest one for your network.
 
+![Latensee screenshot](screenshots/preview.png)
+
 ---
 
 ## Features

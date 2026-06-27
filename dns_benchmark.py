@@ -67,7 +67,18 @@ PROVIDER_COLORS = {
 
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
 
-TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "Grade", "Status"]
+TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "DoH ms", "Grade", "Status"]
+
+DOH_ENDPOINTS = {
+    "1.1.1.1":         "https://1.1.1.1/dns-query",
+    "1.0.0.1":         "https://1.0.0.1/dns-query",
+    "8.8.8.8":         "https://dns.google/dns-query",
+    "8.8.4.4":         "https://dns.google/dns-query",
+    "9.9.9.9":         "https://dns.quad9.net/dns-query",
+    "149.112.112.112": "https://dns.quad9.net/dns-query",
+    "94.140.14.14":    "https://dns.adguard-dns.com/dns-query",
+    "94.140.15.15":    "https://dns.adguard-dns.com/dns-query",
+}
 
 HISTORY_FILE = Path.home() / ".latensee" / "history.json"
 HISTORY_MAX  = 20
@@ -182,6 +193,30 @@ def query_dns(ip: str, domain: str, timeout: float) -> Optional[float]:
         return None
 
 
+def query_doh(ip: str, domain: str, timeout: float) -> Optional[float]:
+    url = DOH_ENDPOINTS.get(ip)
+    if url is None:
+        return None
+    import urllib.request
+    import struct
+    # Minimal DNS wire-format query for <domain> A record
+    def _encode_name(name: str) -> bytes:
+        parts = name.rstrip(".").split(".")
+        return b"".join(bytes([len(p)]) + p.encode() for p in parts) + b"\x00"
+    qname = _encode_name(domain)
+    wire  = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
+    req = urllib.request.Request(
+        f"{url}?dns=" + __import__("base64").urlsafe_b64encode(wire).rstrip(b"=").decode(),
+        headers={"Accept": "application/dns-message"},
+    )
+    try:
+        t0 = time.perf_counter()
+        with urllib.request.urlopen(req, timeout=timeout):
+            return (time.perf_counter() - t0) * 1000
+    except Exception:
+        return None
+
+
 def icmp_ping(ip: str) -> Optional[float]:
     if platform.system() == "Windows":
         cmd, pattern = ["ping", "-n", "4", "-w", "2000", ip], r"Average\s*=\s*(\d+)ms"
@@ -220,7 +255,8 @@ def ms_color(ms: Optional[float]) -> str:
     return "#f87171"
 
 
-def benchmark_one(server: dict, domains: list, n: int, timeout: float, do_ping: bool) -> dict:
+def benchmark_one(server: dict, domains: list, n: int, timeout: float,
+                  do_ping: bool, do_doh: bool = False) -> dict:
     times, fail = [], 0
     for domain in domains:
         for _ in range(n):
@@ -231,6 +267,7 @@ def benchmark_one(server: dict, domains: list, n: int, timeout: float, do_ping: 
                 fail += 1
     total   = len(domains) * n
     ping_ms = icmp_ping(server["ip"]) if do_ping else None
+    doh_ms  = query_doh(server["ip"], domains[0], timeout) if do_doh else None
     avg     = round(sum(times) / len(times), 1) if times else None
     jitter  = round(statistics.stdev(times), 1) if len(times) >= 2 else None
     return {
@@ -243,6 +280,7 @@ def benchmark_one(server: dict, domains: list, n: int, timeout: float, do_ping: 
         "jitter_ms": jitter,
         "loss_pct":  round(fail / total * 100, 1),
         "icmp_ms":   round(ping_ms, 1) if ping_ms is not None else None,
+        "doh_ms":    round(doh_ms, 1) if doh_ms is not None else None,
         "grade":     latency_grade(avg),
         "status":    "OK" if times else "FAILED",
     }
@@ -253,10 +291,10 @@ class BenchmarkWorker(QThread):
     all_done    = pyqtSignal(list)
     progress    = pyqtSignal(int, int)
 
-    def __init__(self, servers, domains, n, timeout, do_ping):
+    def __init__(self, servers, domains, n, timeout, do_ping, do_doh=False):
         super().__init__()
         self.servers, self.domains = servers, domains
-        self.n, self.timeout, self.do_ping = n, timeout, do_ping
+        self.n, self.timeout, self.do_ping, self.do_doh = n, timeout, do_ping, do_doh
         self._stop = False
 
     def stop(self):
@@ -266,7 +304,8 @@ class BenchmarkWorker(QThread):
         results = []
         total   = len(self.servers)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(total, 20)) as pool:
-            futs = {pool.submit(benchmark_one, s, self.domains, self.n, self.timeout, self.do_ping): s
+            futs = {pool.submit(benchmark_one, s, self.domains, self.n, self.timeout,
+                                self.do_ping, self.do_doh): s
                     for s in self.servers}
             for done_i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
                 if self._stop:
@@ -425,18 +464,24 @@ class ResultsTable(QTableWidget):
                 it.setForeground(QBrush(QColor(ms_color(icmp))))
             self.setItem(row, 8, it)
 
+            doh = r.get("doh_ms")
+            it = cell(f"{doh:.1f}" if doh is not None else "—")
+            if doh is not None:
+                it.setForeground(QBrush(QColor(ms_color(doh))))
+            self.setItem(row, 9, it)
+
             grade = r["grade"]
             it = cell(grade)
             it.setForeground(QBrush(QColor(GRADE_COLORS.get(grade, "#888"))))
             font = QFont("Consolas", 9)
             font.setBold(True)
             it.setFont(font)
-            self.setItem(row, 9, it)
+            self.setItem(row, 10, it)
 
             status = r["status"]
             it = cell(status)
             it.setForeground(QBrush(QColor("#4ade80" if status == "OK" else "#f87171")))
-            self.setItem(row, 10, it)
+            self.setItem(row, 11, it)
 
         self.setSortingEnabled(True)
         self.sortItems(4, Qt.SortOrder.AscendingOrder)
@@ -629,6 +674,11 @@ class MainWindow(QMainWindow):
         self.ping_chk = QCheckBox("ICMP ping")
         self.ping_chk.setChecked(True)
         sg2.addRow("", self.ping_chk)
+
+        self.doh_chk = QCheckBox("DNS-over-HTTPS")
+        self.doh_chk.setChecked(False)
+        self.doh_chk.setToolTip("Test DoH latency (supported servers only)")
+        sg2.addRow("", self.doh_chk)
         ll.addWidget(set_grp)
 
         ll.addStretch()
@@ -820,6 +870,7 @@ class MainWindow(QMainWindow):
             self.n_spin.value(),
             self.timeout_spin.value(),
             self.ping_chk.isChecked(),
+            self.doh_chk.isChecked(),
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.server_done.connect(self._on_server_done)

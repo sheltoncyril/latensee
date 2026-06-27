@@ -681,6 +681,11 @@ class MainWindow(QMainWindow):
         self.doh_chk.setChecked(False)
         self.doh_chk.setToolTip("Test DoH latency (supported servers only)")
         sg2.addRow("", self.doh_chk)
+
+        self.bust_chk = QCheckBox("Cache-bust domains")
+        self.bust_chk.setChecked(True)
+        self.bust_chk.setToolTip("Prepend random prefix to domains to bypass resolver cache")
+        sg2.addRow("", self.bust_chk)
         ll.addWidget(set_grp)
 
         ll.addStretch()
@@ -870,8 +875,12 @@ class MainWindow(QMainWindow):
 
     # ── Benchmark flow ────────────────────────────────────────────────────────
     def _run(self):
+        import uuid
         servers = self._selected_servers()
         domains = self._get_domains()
+        if self.bust_chk.isChecked():
+            prefix  = uuid.uuid4().hex[:8]
+            domains = [f"{prefix}.{d}" for d in domains]
         if not servers:
             QMessageBox.warning(self, "No servers", "Select at least one DNS server.")
             return

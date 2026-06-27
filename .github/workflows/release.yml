@@ -1,0 +1,106 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.0.0) — only used for manual runs, no release created"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: latensee.exe
+            asset_name: latensee-windows.exe
+            pyinstaller_flags: "--onefile --windowed --name latensee"
+
+          - os: macos-latest
+            artifact_name: latensee
+            asset_name: latensee-macos
+            pyinstaller_flags: "--onefile --windowed --name latensee"
+
+          - os: ubuntu-22.04
+            artifact_name: latensee
+            asset_name: latensee-linux
+            pyinstaller_flags: "--onefile --name latensee"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-xinerama0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xfixes0 libxcb-xkb1 libgl1 libdbus-1-3 \
+            xvfb
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build binary (Linux — virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run pyinstaller ${{ matrix.pyinstaller_flags }} dns_benchmark.py
+
+      - name: Build binary (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: pyinstaller ${{ matrix.pyinstaller_flags }} dns_benchmark.py
+
+      - name: Rename artifact
+        shell: bash
+        run: mv dist/${{ matrix.artifact_name }} dist/${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Latensee ${{ github.ref_name }}"
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/latensee-windows.exe/latensee-windows.exe
+            dist/latensee-macos/latensee-macos
+            dist/latensee-linux/latensee-linux

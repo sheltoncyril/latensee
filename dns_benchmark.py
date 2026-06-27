@@ -63,6 +63,7 @@ PROVIDER_COLORS = {
     "OpenDNS":    "#0097d9", "AdGuard":  "#5fb955", "Comodo":   "#c9303e",
     "Level3":     "#94a3b8", "Verisign": "#0369a1", "NextDNS":  "#1d4ed8",
     "Custom":     "#a0aec0",
+    "System":     "#e2e8f0",
 }
 
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
@@ -578,6 +579,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Latensee")
         self.resize(1240, 800)
         self.servers      = [s.copy() for s in BUILTIN_SERVERS]
+        self._prepend_system_dns()
         self.results      = []
         self.prev_results: Optional[list] = None
         self.worker: Optional[BenchmarkWorker] = None
@@ -856,6 +858,15 @@ class MainWindow(QMainWindow):
             return dns.resolver.Resolver().nameservers
         except Exception:
             return []
+
+    def _prepend_system_dns(self):
+        builtin_ips = {s["ip"] for s in BUILTIN_SERVERS}
+        for ip in self._system_dns():
+            if ip not in builtin_ips:
+                self.servers.insert(0, {
+                    "name": f"System DNS  {ip}", "ip": ip,
+                    "provider": "System", "note": "Your current system resolver",
+                })
 
     # ── Benchmark flow ────────────────────────────────────────────────────────
     def _run(self):

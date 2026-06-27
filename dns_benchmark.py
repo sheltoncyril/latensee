@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QFrame,
     QProgressBar, QSplitter, QFileDialog, QMessageBox, QDialog,
     QFormLayout, QDialogButtonBox, QStatusBar, QGroupBox, QLineEdit,
-    QSizePolicy,
+    QSizePolicy, QColorDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPalette, QBrush, QShortcut, QKeySequence
@@ -790,7 +790,11 @@ class MainWindow(QMainWindow):
         hl.setSpacing(4)
         chk = QCheckBox(f"{s['name']}  {s['ip']}")
         chk.setChecked(checked)
-        chk.setToolTip(s.get("note", ""))
+        chk.setToolTip(s.get("note", "") + "  [right-click to change color]")
+        chk.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        chk.customContextMenuRequested.connect(
+            lambda pos, sv=s, c=chk: self._color_context_menu(c.mapToGlobal(pos), sv)
+        )
         rm = QPushButton("×")
         rm.setFixedSize(18, 18)
         rm.setStyleSheet(f"color: {DIM}; border: none; background: transparent; font-size: 14px; padding: 0;")
@@ -805,6 +809,20 @@ class MainWindow(QMainWindow):
         self._checkboxes = [(s, c) for s, c in self._checkboxes if c is not chk]
         row_widget.setParent(None)
         row_widget.deleteLater()
+
+    def _color_context_menu(self, global_pos, server: dict):
+        menu = QMenu(self)
+        action = menu.addAction(f"Change color — {server['provider']}")
+        if menu.exec(global_pos) is action:
+            self._change_provider_color(server["provider"])
+
+    def _change_provider_color(self, provider: str):
+        current = QColor(PROVIDER_COLORS.get(provider, "#888888"))
+        color = QColorDialog.getColor(current, self, f"Color for {provider}")
+        if color.isValid():
+            PROVIDER_COLORS[provider] = color.name()
+            if self.results:
+                self.chart.update_chart(self.results, self.ping_chk.isChecked(), self.prev_results)
 
     def _select_all(self):
         for _, c in self._checkboxes:

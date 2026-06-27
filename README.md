@@ -1,0 +1,111 @@
+# Latensee
+
+**See your DNS latency in real time.** A fast, standalone desktop app that benchmarks public DNS resolvers and helps you pick the fastest one for your network.
+
+![Latensee screenshot](screenshots/preview.png)
+
+---
+
+## Features
+
+- **15 pre-loaded providers** — Cloudflare, Google, Quad9, OpenDNS, AdGuard, Comodo, Level3, Verisign, NextDNS, and more
+- **Concurrent testing** — all servers tested simultaneously, results appear as they arrive
+- **Live chart** — horizontal bar chart updates in real time; color-coded by provider with min/max range bands
+- **ICMP ping layer** — measures raw network RTT alongside DNS resolution time (diamond markers on chart)
+- **Grade system** — A (< 20 ms) through F (timeout/failed) per server
+- **Add custom servers** — enter any IP with a name label, validated before adding
+- **Custom test domains** — edit the domain list to reflect your real traffic
+- **Per-provider summary** — best IP and avg latency grouped by provider
+- **Export to CSV** — timestamped results file
+- **System DNS detection** — shows which DNS servers your OS is currently using
+- **Cross-platform** — works on Windows, macOS, and Linux
+
+---
+
+## Installation
+
+### From a release binary (easiest)
+
+Download the pre-built binary for your OS from the [Releases](../../releases) page — no Python required.
+
+| Platform | File |
+|----------|------|
+| Windows  | `latensee-windows.exe` |
+| macOS    | `latensee-macos` |
+| Linux    | `latensee-linux` |
+
+**macOS / Linux:** make the file executable first:
+```bash
+chmod +x latensee-macos   # or latensee-linux
+./latensee-macos
+```
+
+**Linux:** may need Qt/XCB system libraries:
+```bash
+sudo apt install libxcb-xinerama0 libxkbcommon-x11-0 libxcb-cursor0 libgl1
+```
+
+### From source
+
+**Requirements:** Python 3.10+
+
+```bash
+git clone https://github.com/sheltoncyril/latensee.git
+cd latensee
+pip install -r requirements.txt
+python dns_benchmark.py
+```
+
+---
+
+## Usage
+
+1. **Select servers** — check/uncheck providers in the left sidebar; use All / None for quick toggling
+2. **Set domains** — edit the test domain list to match your typical browsing (more domains = more accurate averages)
+3. **Tune settings** — adjust queries per domain (1–10) and timeout; enable/disable ICMP ping
+4. **Run** — click **Run Benchmark**; the chart updates live as each server finishes
+5. **Export** — click **Export CSV** to save results
+
+---
+
+## Building from source
+
+Install [PyInstaller](https://pyinstaller.org/):
+
+```bash
+pip install pyinstaller
+```
+
+**Windows** (produces `dist/latensee.exe`):
+```bash
+pyinstaller --onefile --windowed --name latensee dns_benchmark.py
+```
+
+**macOS** (produces `dist/latensee`):
+```bash
+pyinstaller --onefile --windowed --name latensee dns_benchmark.py
+```
+
+**Linux** (produces `dist/latensee`):
+```bash
+pyinstaller --onefile --name latensee dns_benchmark.py
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! See [CLAUDE.md](CLAUDE.md) for a full architecture guide — it's written to help both humans and AI coding agents understand the codebase and contribute effectively.
+
+Quick pointers:
+- The entire app lives in a single file: [`dns_benchmark.py`](dns_benchmark.py)
+- DNS query logic is in `query_dns()` and `benchmark_one()`
+- The chart is `DNSChart(FigureCanvasQTAgg)` using matplotlib
+- The background worker is `BenchmarkWorker(QThread)` — all signals/slots are defined there
+- To add a new built-in DNS server, append an entry to `BUILTIN_SERVERS` at the top of the file
+
+---
+
+## License
+
+MIT

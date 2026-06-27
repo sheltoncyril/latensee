@@ -6,33 +6,26 @@ def draw_icon(size: int) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    r = max(4, size // 5)
+    r = max(3, size // 5)
     d.rounded_rectangle([0, 0, size - 1, size - 1], radius=r, fill="#0f111a")
 
-    bars = [
-        ("#f6821f", 0.38),
-        ("#7c3aed", 0.50),
-        ("#4285f4", 0.62),
-        ("#0097d9", 0.75),
-        ("#5fb955", 0.88),
-    ]
+    colors = ["#f6821f", "#4285f4", "#7c3aed", "#5fb955"]
+    fracs  = [0.26, 0.48, 0.69, 0.91]
+    n      = len(colors)
+    pad    = max(2, int(size * 0.15))
+    inner_w = size - 2 * pad
+    inner_h = size - 2 * pad
+    bar_w  = max(1, int(inner_w / n) - max(1, int(size * 0.04)))
+    gap    = max(1, (inner_w - n * bar_w) // (n - 1))
+    bottom = size - pad
 
-    pad   = size * 0.15
-    n     = len(bars)
-    bar_h = (size - 2 * pad) / (n * 1.75)
-    gap   = bar_h * 0.75
-    max_w = size - 2 * pad
-    y     = pad
-
-    for color, frac in bars:
-        w    = max_w * frac
-        br   = max(1, bar_h / 2)
-        d.rounded_rectangle([pad, y, pad + w, y + bar_h], radius=br, fill=color)
-
-        mx, my, dm = pad + w, y + bar_h / 2, max(1, bar_h * 0.42)
-        d.polygon([(mx + dm, my), (mx, my - dm), (mx - dm, my), (mx, my + dm)], fill="white")
-
-        y += bar_h + gap
+    for i, (color, frac) in enumerate(zip(colors, fracs)):
+        bh = max(2, int(inner_h * frac))
+        x0 = pad + i * (bar_w + gap)
+        y0 = bottom - bh
+        x1 = x0 + bar_w
+        br = max(1, bar_w // 4)
+        d.rounded_rectangle([x0, y0, x1, bottom], radius=br, fill=color)
 
     return img
 

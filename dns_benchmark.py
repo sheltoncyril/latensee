@@ -786,39 +786,24 @@ def _make_icon() -> "QIcon":
     bg.addRoundedRect(QRectF(2, 2, SZ - 4, SZ - 4), 52, 52)
     p.fillPath(bg, QColor("#0f111a"))
 
-    # 5 horizontal bars — same provider colours as the chart
-    bars = [
-        ("#f6821f", 0.38),   # Cloudflare
-        ("#7c3aed", 0.50),   # Quad9
-        ("#4285f4", 0.62),   # Google
-        ("#0097d9", 0.75),   # OpenDNS
-        ("#5fb955", 0.88),   # AdGuard
-    ]
+    # 4 ascending signal bars, bottom-aligned
+    colors = ["#f6821f", "#4285f4", "#7c3aed", "#5fb955"]
+    fracs  = [0.26, 0.48, 0.69, 0.91]
     pad    = 38
-    n      = len(bars)
-    bar_h  = (SZ - 2 * pad) / (n * 1.75)
-    gap    = bar_h * 0.75
-    max_w  = SZ - 2 * pad
-    y      = pad
+    n      = len(colors)
+    inner_w = SZ - 2 * pad
+    inner_h = SZ - 2 * pad
+    bar_w  = int(inner_w / n) - 8
+    gap    = (inner_w - n * bar_w) // (n - 1)
+    bottom = SZ - pad
 
-    for color, frac in bars:
-        w = max_w * frac
-
+    for i, (color, frac) in enumerate(zip(colors, fracs)):
+        bh = int(inner_h * frac)
+        x  = pad + i * (bar_w + gap)
+        y  = bottom - bh
         bar_path = QPainterPath()
-        bar_path.addRoundedRect(QRectF(pad, y, w, bar_h), bar_h / 2, bar_h / 2)
+        bar_path.addRoundedRect(QRectF(x, y, bar_w, bh), bar_w * 0.28, bar_w * 0.28)
         p.fillPath(bar_path, QColor(color))
-
-        # Diamond marker at the right end of each bar
-        mx, my, dm = pad + w, y + bar_h / 2, bar_h * 0.42
-        diamond = QPainterPath()
-        diamond.moveTo(mx + dm, my)
-        diamond.lineTo(mx,      my - dm)
-        diamond.lineTo(mx - dm, my)
-        diamond.lineTo(mx,      my + dm)
-        diamond.closeSubpath()
-        p.fillPath(diamond, QColor("#ffffff"))
-
-        y += bar_h + gap
 
     p.end()
     return QIcon(px)

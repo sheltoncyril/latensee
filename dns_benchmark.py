@@ -982,7 +982,7 @@ def _make_icon() -> "QIcon":
     from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QColor, QIcon
     from PyQt6.QtCore import QRectF
 
-    SZ = 256
+    SZ = 512
     px = QPixmap(SZ, SZ)
     px.fill(Qt.GlobalColor.transparent)
 

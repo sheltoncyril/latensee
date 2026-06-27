@@ -1,7 +1,7 @@
 """Generates icon.ico and icon.png for use with PyInstaller builds."""
 from PIL import Image, ImageDraw
 
-RENDER_SIZE = 512
+RENDER_SIZE = 1024
 
 
 def draw_icon_hires() -> Image.Image:
@@ -33,15 +33,10 @@ def draw_icon_hires() -> Image.Image:
     return img
 
 
-def scale(img: Image.Image, size: int) -> Image.Image:
-    return img.resize((size, size), Image.LANCZOS)
-
-
 if __name__ == "__main__":
-    hires = draw_icon_hires()
+    hires  = draw_icon_hires()
     sizes  = [16, 24, 32, 48, 64, 128, 256]
-    images = [scale(hires, s) for s in sizes]
-    images[0].save("icon.ico", format="ICO", sizes=[(s, s) for s in sizes],
-                   append_images=images[1:])
-    hires.save("icon.png", format="PNG")
+    # Let PIL LANCZOS-resize from hires source for each ICO frame
+    hires.save("icon.ico", format="ICO", sizes=[(s, s) for s in sizes])
+    hires.resize((256, 256), Image.LANCZOS).save("icon.png", format="PNG")
     print("Generated icon.ico and icon.png")

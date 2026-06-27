@@ -182,7 +182,14 @@ def icmp_ping(ip: str) -> Optional[float]:
     else:
         cmd, pattern = ["ping", "-c", "4", "-W", "2", ip], r"\d+\.?\d*/(\d+\.?\d*)/\d+\.?\d*"
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=15)
+        kwargs: dict = {"stderr": subprocess.DEVNULL, "text": True, "timeout": 15}
+        if platform.system() == "Windows":
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kwargs["startupinfo"] = si
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        out = subprocess.check_output(cmd, **kwargs)
         m = re.search(pattern, out)
         return round(float(m.group(1)), 1) if m else None
     except Exception:

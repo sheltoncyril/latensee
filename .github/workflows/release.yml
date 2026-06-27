@@ -24,12 +24,12 @@ jobs:
           - os: windows-latest
             artifact_name: latensee.exe
             asset_name: latensee-windows.exe
-            pyinstaller_flags: "--onefile --windowed --name latensee"
+            pyinstaller_flags: "--onefile --windowed --icon icon.ico --name latensee"
 
           - os: macos-latest
             artifact_name: latensee
             asset_name: latensee-macos
-            pyinstaller_flags: "--onefile --windowed --name latensee"
+            pyinstaller_flags: "--onefile --windowed --icon icon.png --name latensee"
 
           - os: ubuntu-22.04
             artifact_name: latensee
@@ -58,7 +58,10 @@ jobs:
             xvfb
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt pyinstaller
+        run: pip install -r requirements.txt pyinstaller pillow
+
+      - name: Generate icon
+        run: python generate_icon.py
 
       - name: Build binary (Linux — virtual display)
         if: runner.os == 'Linux'

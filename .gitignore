@@ -31,6 +31,10 @@ ENV/
 Thumbs.db
 desktop.ini
 
+# Generated build assets
+icon.ico
+icon.png
+
 # Export artifacts
 dns_benchmark_*.csv
 latensee_*.csv

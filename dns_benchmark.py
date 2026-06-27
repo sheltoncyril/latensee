@@ -634,11 +634,31 @@ class MainWindow(QMainWindow):
 
     def _populate_server_checkboxes(self):
         for s in self.servers:
-            chk = QCheckBox(f"{s['name']}  {s['ip']}")
-            chk.setChecked(True)
-            chk.setToolTip(s.get("note", ""))
-            self._chk_layout.addWidget(chk)
-            self._checkboxes.append((s, chk))
+            self._add_server_row(s)
+
+    def _add_server_row(self, s: dict, checked: bool = True):
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        hl = QHBoxLayout(row)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(4)
+        chk = QCheckBox(f"{s['name']}  {s['ip']}")
+        chk.setChecked(checked)
+        chk.setToolTip(s.get("note", ""))
+        rm = QPushButton("×")
+        rm.setFixedSize(18, 18)
+        rm.setStyleSheet(f"color: {DIM}; border: none; background: transparent; font-size: 14px; padding: 0;")
+        rm.clicked.connect(lambda _, sv=s, r=row, c=chk: self._remove_server(sv, r, c))
+        hl.addWidget(chk, stretch=1)
+        hl.addWidget(rm)
+        self._chk_layout.insertWidget(self._chk_layout.count() - 1, row)
+        self._checkboxes.append((s, chk))
+
+    def _remove_server(self, server: dict, row_widget: QWidget, chk: QCheckBox):
+        self.servers = [s for s in self.servers if s["ip"] != server["ip"]]
+        self._checkboxes = [(s, c) for s, c in self._checkboxes if c is not chk]
+        row_widget.setParent(None)
+        row_widget.deleteLater()
 
     def _select_all(self):
         for _, c in self._checkboxes:
@@ -657,10 +677,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Already exists", f"{s['ip']} is already in the list.")
             return
         self.servers.append(s)
-        chk = QCheckBox(f"{s['name']}  {s['ip']}")
-        chk.setChecked(True)
-        self._chk_layout.insertWidget(self._chk_layout.count() - 1, chk)
-        self._checkboxes.append((s, chk))
+        self._add_server_row(s)
 
     def _selected_servers(self) -> list:
         return [s for s, c in self._checkboxes if c.isChecked()]

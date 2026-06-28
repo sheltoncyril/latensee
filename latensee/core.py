@@ -119,6 +119,44 @@ def ms_color(ms: Optional[float]) -> str:
     return "#f87171"
 
 
+def flag_dns_mismatches(results: list) -> None:
+    """Annotate results in-place when a resolver returns different A-record IPs
+    than the majority for the same domain (majority-vote per domain).
+
+    Adds _dns_mismatch=True and _mismatch_detail=str to outlier dicts.
+    50/50 ties are not flagged.
+    """
+    domains: set[str] = set()
+    for r in results:
+        domains.update(r.get("resolved_ips", {}).keys())
+
+    for domain in domains:
+        vote: dict = {}
+        for r in results:
+            ips = r.get("resolved_ips", {}).get(domain)
+            if ips:
+                key = frozenset(ips)
+                vote[key] = vote.get(key, 0) + 1
+
+        if not vote:
+            continue
+
+        majority_ips = max(vote, key=lambda k: vote[k])
+        total_votes = sum(vote.values())
+        if vote[majority_ips] <= total_votes / 2:
+            continue
+
+        for r in results:
+            ips = r.get("resolved_ips", {}).get(domain)
+            if ips and frozenset(ips) != majority_ips:
+                r["_dns_mismatch"] = True
+                majority_str = ", ".join(sorted(majority_ips))
+                actual_str   = ", ".join(sorted(ips))
+                r["_mismatch_detail"] = (
+                    f"{domain}: majority={majority_str} | this={actual_str}"
+                )
+
+
 def _percentile(data: list[float], pct: int) -> Optional[float]:
     """Return the pct-th percentile of data, or None if fewer than 10 samples."""
     if len(data) < 10:

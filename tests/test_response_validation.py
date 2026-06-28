@@ -1,14 +1,7 @@
 """Tests for DNS response validation / mismatch flagging."""
-import os
-import sys
 import unittest
 
-# _flag_dns_mismatches lives in dns_benchmark (UI module), but it's pure logic
-# with no Qt usage, so we can import it safely with QT_QPA_PLATFORM=offscreen.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from dns_benchmark import _flag_dns_mismatches
+from latensee import flag_dns_mismatches
 
 
 def _make_result(name, ip, resolved):
@@ -26,7 +19,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("B", "8.8.8.8", {"example.com": ["93.184.216.34"]}),
             _make_result("C", "9.9.9.9", {"example.com": ["93.184.216.34"]}),
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         for r in results:
             self.assertFalse(r.get("_dns_mismatch", False),
                              f"{r['name']} should not be flagged when all agree")
@@ -37,7 +30,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("B", "8.8.8.8", {"example.com": ["93.184.216.34"]}),
             _make_result("C", "9.9.9.9", {"example.com": ["1.2.3.4"]}),  # different
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.assertFalse(results[0].get("_dns_mismatch", False), "A should not be flagged")
         self.assertFalse(results[1].get("_dns_mismatch", False), "B should not be flagged")
         self.assertTrue(results[2].get("_dns_mismatch", False),  "C should be flagged")
@@ -48,7 +41,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("B", "8.8.8.8", {"example.com": ["93.184.216.34"]}),
             _make_result("C", "9.9.9.9", {"example.com": ["1.2.3.4"]}),
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.assertIn("_mismatch_detail", results[2])
         self.assertIn("example.com", results[2]["_mismatch_detail"])
 
@@ -58,7 +51,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("A", "1.1.1.1", {"example.com": ["1.2.3.4"]}),
             _make_result("B", "8.8.8.8", {"example.com": ["5.6.7.8"]}),
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         for r in results:
             self.assertFalse(r.get("_dns_mismatch", False),
                              "50/50 split should not flag either side")
@@ -69,7 +62,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("B", "8.8.8.8", {"example.com": ["93.184.216.34"]}),
             _make_result("C", "9.9.9.9", {}),  # no resolved IPs
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.assertFalse(results[2].get("_dns_mismatch", False),
                          "Server with no resolved IPs must not be flagged")
 
@@ -89,12 +82,12 @@ class TestFlagDnsMismatches(unittest.TestCase):
                 "other.com":   ["2.2.2.2"],  # agrees here
             }),
         ]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.assertTrue(results[2].get("_dns_mismatch", False),
                         "C should be flagged due to example.com mismatch")
 
     def test_no_results_no_crash(self):
-        _flag_dns_mismatches([])  # must not raise
+        flag_dns_mismatches([])  # must not raise
 
     def test_mutates_in_place(self):
         results = [
@@ -103,7 +96,7 @@ class TestFlagDnsMismatches(unittest.TestCase):
             _make_result("C", "9.9.9.9", {"example.com": ["9.9.9.9"]}),
         ]
         original_ids = [id(r) for r in results]
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.assertEqual([id(r) for r in results], original_ids,
                          "_flag_dns_mismatches must mutate in-place, not replace dicts")
 

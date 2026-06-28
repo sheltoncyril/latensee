@@ -72,6 +72,7 @@ import pandas as pd
 from latensee import (
     BUILTIN_SERVERS, DEFAULT_DOMAINS, DOH_ENDPOINTS,
     query_dns, query_doh, icmp_ping, latency_grade, ms_color, benchmark_one,
+    flag_dns_mismatches,
 )
 
 from PyQt6.QtWidgets import (
@@ -80,7 +81,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QFrame,
     QProgressBar, QSplitter, QFileDialog, QMessageBox, QDialog,
     QFormLayout, QDialogButtonBox, QStatusBar, QGroupBox, QLineEdit,
-    QSizePolicy, QColorDialog, QMenu,
+    QSizePolicy, QColorDialog, QMenu, QInputDialog, QListWidget,
 )
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPalette, QBrush, QShortcut, QKeySequence
@@ -104,8 +105,32 @@ GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", 
 
 TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "P95 ms", "Loss %", "ICMP ms", "DoH ms", "Grade", "Status"]
 
-HISTORY_FILE = Path.home() / ".latensee" / "history.json"
-HISTORY_MAX  = 20
+HISTORY_FILE  = Path.home() / ".latensee" / "history.json"
+HISTORY_MAX   = 20
+PROFILES_FILE = Path.home() / ".latensee" / "profiles.json"
+
+_BUILTIN_PROFILES: list[dict] = [
+    {
+        "name": "★ Gaming  (Cloudflare + Google)",
+        "server_ips": ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4"],
+        "domains": None,
+    },
+    {
+        "name": "★ Privacy  (Quad9 + AdGuard + NextDNS)",
+        "server_ips": ["9.9.9.9", "149.112.112.112", "94.140.14.14", "94.140.15.15", "45.90.28.0"],
+        "domains": None,
+    },
+    {
+        "name": "★ Minimal  (Cloudflare only)",
+        "server_ips": ["1.1.1.1"],
+        "domains": None,
+    },
+    {
+        "name": "★ All providers",
+        "server_ips": [s["ip"] for s in BUILTIN_SERVERS if not s.get("ipv6")],
+        "domains": None,
+    },
+]
 
 BG0  = "#0b0e1a"   # darkest — window background
 BG1  = "#10141f"   # sidebar / panel
@@ -533,47 +558,6 @@ class AddServerDialog(QDialog):
         return {"name": self.name_edit.text().strip() or ip,
                 "ip": ip, "provider": "Custom", "note": ""}
 
-# ── Response validation ───────────────────────────────────────────────────────
-def _flag_dns_mismatches(results: list) -> None:
-    """Annotate results in-place with _dns_mismatch=True when a resolver returns
-    different A-record IPs than the majority for the same domain.
-
-    Works by majority vote per domain: if ≥50% of resolvers agree on a set of
-    IPs, any resolver that returns a different set is flagged.
-    """
-    # Collect all resolved IPs per domain across all servers
-    domains: set[str] = set()
-    for r in results:
-        domains.update(r.get("resolved_ips", {}).keys())
-
-    for domain in domains:
-        # Map: frozenset(ips) -> count
-        vote: dict = {}
-        for r in results:
-            ips = r.get("resolved_ips", {}).get(domain)
-            if ips:
-                key = frozenset(ips)
-                vote[key] = vote.get(key, 0) + 1
-
-        if not vote:
-            continue
-
-        majority_ips = max(vote, key=lambda k: vote[k])
-        # Only flag if majority is clear (>= half of voters)
-        total_votes = sum(vote.values())
-        if vote[majority_ips] <= total_votes / 2:
-            continue
-
-        for r in results:
-            ips = r.get("resolved_ips", {}).get(domain)
-            if ips and frozenset(ips) != majority_ips:
-                r["_dns_mismatch"] = True
-                majority_str = ", ".join(sorted(majority_ips))
-                actual_str   = ", ".join(sorted(ips))
-                r["_mismatch_detail"] = (
-                    f"{domain}: majority={majority_str} | this={actual_str}"
-                )
-
 # ── History helpers ───────────────────────────────────────────────────────────
 def _load_history() -> list:
     try:
@@ -590,6 +574,22 @@ def _save_history(results: list) -> None:
         HISTORY_FILE.write_text(json.dumps(runs, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+# ── Profile helpers ───────────────────────────────────────────────────────────
+def _load_profiles() -> list:
+    try:
+        return json.loads(PROFILES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def _write_profiles(profiles: list) -> None:
+    try:
+        PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PROFILES_FILE.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
 
 class HistoryDialog(QDialog):
     def __init__(self, parent=None):
@@ -624,6 +624,99 @@ class HistoryDialog(QDialog):
         run_idx = len(self._runs) - 1 - idx
         self.selected_results = self._runs[run_idx]["results"]
         self.accept()
+
+class ProfilesDialog(QDialog):
+    """Load or save named server/domain configurations."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Benchmark Profiles")
+        self.setMinimumSize(440, 340)
+        self._parent_win = parent
+        self.selected_profile: Optional[dict] = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setFont(QFont("Consolas", 9))
+        self.list_widget.setStyleSheet(
+            f"background: {BG2}; border: 1px solid {LINE}; border-radius: 4px;"
+        )
+        self.list_widget.doubleClicked.connect(self._load)
+        layout.addWidget(self.list_widget)
+
+        hint = QLabel("Double-click or select + Load to apply. Profiles select servers by IP.")
+        hint.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        for label, slot in [("Load", self._load), ("Save Current…", self._save_current),
+                             ("Delete", self._delete)]:
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._refresh()
+
+    def _all_profiles(self) -> list[dict]:
+        return list(_BUILTIN_PROFILES) + _load_profiles()
+
+    def _refresh(self):
+        self.list_widget.clear()
+        for p in self._all_profiles():
+            n = len(p["server_ips"])
+            d = f"  ·  {len(p['domains'])} domains" if p.get("domains") else ""
+            self.list_widget.addItem(f"{p['name']}  —  {n} server(s){d}")
+
+    def _load(self):
+        idx = self.list_widget.currentRow()
+        if idx < 0:
+            return
+        self.selected_profile = self._all_profiles()[idx]
+        self.accept()
+
+    def _save_current(self):
+        win = self._parent_win
+        if win is None:
+            return
+        name, ok = QInputDialog.getText(self, "Save Profile", "Profile name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        profile = {
+            "name": name,
+            "server_ips": [s["ip"] for s, c in win._checkboxes if c.isChecked()],
+            "domains": win._get_domains(),
+        }
+        saved = _load_profiles()
+        saved = [p for p in saved if p["name"] != name]  # replace if same name
+        saved.append(profile)
+        _write_profiles(saved)
+        self._refresh()
+
+    def _delete(self):
+        idx = self.list_widget.currentRow()
+        n_builtins = len(_BUILTIN_PROFILES)
+        if idx < n_builtins:
+            QMessageBox.information(self, "Cannot delete", "Built-in profiles cannot be deleted.")
+            return
+        if idx < 0:
+            return
+        saved = _load_profiles()
+        user_idx = idx - n_builtins
+        if 0 <= user_idx < len(saved):
+            del saved[user_idx]
+            _write_profiles(saved)
+            self._refresh()
+
 
 # ── Main window ───────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
@@ -813,6 +906,11 @@ class MainWindow(QMainWindow):
         self.history_btn.setFixedHeight(36)
         self.history_btn.clicked.connect(self._show_history)
         bot.addWidget(self.history_btn)
+
+        self.profiles_btn = QPushButton("Profiles")
+        self.profiles_btn.setFixedHeight(36)
+        self.profiles_btn.clicked.connect(self._show_profiles)
+        bot.addWidget(self.profiles_btn)
 
         self.monitor_btn = QPushButton("Monitor")
         self.monitor_btn.setFixedHeight(36)
@@ -1043,7 +1141,7 @@ class MainWindow(QMainWindow):
         self.chart.update_chart(partial, self.ping_chk.isChecked(), self.prev_results)
 
     def _on_all_done(self, results: list):
-        _flag_dns_mismatches(results)
+        flag_dns_mismatches(results)
         self.results = results
         show_icmp = self.ping_chk.isChecked()
         self.chart.update_chart(results, show_icmp, self.prev_results)
@@ -1106,6 +1204,22 @@ class MainWindow(QMainWindow):
         if self.results:
             self.chart.update_chart(self.results, self.ping_chk.isChecked(), self.prev_results)
         self.status_bar.showMessage("Previous run loaded — run benchmark to compare")
+
+    def _show_profiles(self):
+        dlg = ProfilesDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_profile:
+            self._apply_profile(dlg.selected_profile)
+
+    def _apply_profile(self, profile: dict):
+        target_ips = set(profile["server_ips"])
+        for s, c in self._checkboxes:
+            c.setChecked(s["ip"] in target_ips)
+        if profile.get("domains"):
+            self.domains_edit.setPlainText("\n".join(profile["domains"]))
+        n_selected = sum(1 for s, c in self._checkboxes if c.isChecked())
+        self.status_bar.showMessage(
+            f"Profile '{profile['name']}' loaded — {n_selected} server(s) selected"
+        )
 
     def _export_csv(self):
         if not self.results:

@@ -2,6 +2,7 @@
 
 from .core import (
     benchmark_one,
+    flag_dns_mismatches,
     icmp_ping,
     latency_grade,
     ms_color,
@@ -22,4 +23,5 @@ __all__ = [
     "latency_grade",
     "ms_color",
     "benchmark_one",
+    "flag_dns_mismatches",
 ]

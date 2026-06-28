@@ -13,6 +13,59 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# ── Minimal Qt: loaded first so splash can appear immediately ─────────────────
+from PyQt6.QtWidgets import QApplication, QSplashScreen
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont, QPainter, QPixmap
+
+
+def _make_splash_pixmap() -> QPixmap:
+    W, H = 480, 260
+    px = QPixmap(W, H)
+    px.fill(QColor("#0b0e1a"))
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    bar_colors = ["#f6821f", "#4285f4", "#7c3aed", "#5fb955"]
+    bar_fracs  = [0.30, 0.52, 0.74, 0.96]
+    bw, gap, max_h = 18, 10, 72
+    total_w = len(bar_colors) * bw + (len(bar_colors) - 1) * gap
+    bx = (W - total_w) // 2
+    by = H - 48
+    p.setPen(Qt.PenStyle.NoPen)
+    for i, (color, frac) in enumerate(zip(bar_colors, bar_fracs)):
+        bh = int(max_h * frac)
+        p.setBrush(QColor(color))
+        p.drawRoundedRect(bx + i * (bw + gap), by - bh, bw, bh, 4, 4)
+
+    p.setPen(QColor("#cbd5e1"))
+    p.setFont(QFont("Segoe UI", 30, QFont.Weight.Bold))
+    p.drawText(0, 52, W, 52, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, "Latensee")
+
+    p.setPen(QColor("#64748b"))
+    p.setFont(QFont("Segoe UI", 11))
+    p.drawText(0, 108, W, 28, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+               "DNS Latency Benchmarking")
+
+    p.setPen(QColor("#4f46e5"))
+    p.setFont(QFont("Segoe UI", 9))
+    p.drawText(0, H - 30, W, 22, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+               "Loading…")
+    p.end()
+    return px
+
+
+if __name__ == "__main__":
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+    _app = QApplication(sys.argv)
+    _app.setApplicationName("Latensee")
+    _splash = QSplashScreen(_make_splash_pixmap(), Qt.WindowType.WindowStaysOnTopHint)
+    _splash.show()
+    _app.processEvents()
+
+# ── Heavy imports — splash is visible during these ────────────────────────────
 import dns.resolver
 import pandas as pd
 
@@ -1048,13 +1101,9 @@ def _make_icon() -> "QIcon":
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-    app = QApplication(sys.argv)
-    app.setApplicationName("Latensee")
-    app.setWindowIcon(_make_icon())
-    apply_dark_theme(app)
+    _app.setWindowIcon(_make_icon())
+    apply_dark_theme(_app)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec())
+    _splash.finish(win)
+    sys.exit(_app.exec())

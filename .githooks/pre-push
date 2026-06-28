@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run unit tests before every push. Install once with:
+#   git config core.hooksPath .githooks
+echo "==> Running tests before push..."
+python -m pytest tests/ -q
+if [ $? -ne 0 ]; then
+  echo "==> Tests failed. Push aborted."
+  exit 1
+fi
+echo "==> Tests passed."

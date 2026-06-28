@@ -29,10 +29,11 @@ from PyQt6.QtWidgets import (
     QFormLayout, QDialogButtonBox, QStatusBar, QGroupBox, QLineEdit,
     QSizePolicy, QColorDialog, QMenu,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPalette, QBrush, QShortcut, QKeySequence
 
 import matplotlib
+import matplotlib.ticker
 matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -194,12 +195,14 @@ def query_dns(ip: str, domain: str, timeout: float) -> Optional[float]:
     r.nameservers = [ip]
     r.timeout = timeout
     r.lifetime = timeout
+    t0 = time.perf_counter()
     try:
-        t0 = time.perf_counter()
         r.resolve(domain, "A")
-        return (time.perf_counter() - t0) * 1000
+    except dns.resolver.NXDOMAIN:
+        pass  # resolver answered — NXDOMAIN still counts as valid latency sample
     except Exception:
         return None
+    return (time.perf_counter() - t0) * 1000
 
 
 def query_doh(ip: str, domain: str, timeout: float) -> Optional[float]:
@@ -421,6 +424,67 @@ class DNSChart(FigureCanvasQTAgg):
         self.fig.tight_layout(pad=1.2)
         self.draw()
 
+# ── Time-series chart ─────────────────────────────────────────────────────────
+class TimeSeriesChart(FigureCanvasQTAgg):
+    def __init__(self):
+        self.fig = Figure(facecolor=BG0)
+        super().__init__(self.fig)
+        self.ax = self.fig.add_subplot(111)
+        self._history: dict = {}   # ip -> [(timestamp, avg_ms)]
+        self._decorate()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def _decorate(self):
+        ax = self.ax
+        ax.set_facecolor(BG0)
+        ax.tick_params(colors=DIM, labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color(LINE)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="y", color=BG3, linewidth=0.6, zorder=0)
+        ax.set_axisbelow(True)
+
+    def add_run(self, results: list, timestamp: str) -> None:
+        for r in results:
+            if r["status"] == "OK" and r["avg_ms"] is not None:
+                self._history.setdefault(r["ip"], []).append(
+                    (timestamp, r["avg_ms"], r["name"], r["provider"])
+                )
+        self._redraw()
+
+    def clear_history(self) -> None:
+        self._history.clear()
+        self.ax.clear()
+        self._decorate()
+        self.draw()
+
+    def _redraw(self) -> None:
+        self.ax.clear()
+        self._decorate()
+        if not self._history:
+            return
+        window = 30
+        for ip, pts in self._history.items():
+            pts      = pts[-window:]
+            xs       = list(range(len(pts)))
+            ys       = [p[1] for p in pts]
+            name     = pts[-1][2]
+            provider = pts[-1][3]
+            color    = PROVIDER_COLORS.get(provider, "#888")
+            self.ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.4,
+                         color=color, label=name, alpha=0.9)
+        self.ax.set_ylabel("avg latency (ms)", color=DIM, fontsize=9)
+        all_pts = list(self._history.values())[0][-window:]
+        labels  = [p[0] for p in all_pts]
+        self.ax.set_xticks(range(len(labels)))
+        self.ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=7)
+        self.ax.legend(loc="upper left", facecolor=BG3, edgecolor=LINE,
+                       labelcolor="#94a3b8", fontsize=7.5, framealpha=0.9,
+                       ncol=max(1, len(self._history) // 8))
+        self.fig.tight_layout(pad=1.0)
+        self.draw()
+
 # ── Results table ─────────────────────────────────────────────────────────────
 class ResultsTable(QTableWidget):
     def __init__(self):
@@ -589,12 +653,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Latensee")
         self.resize(1240, 800)
-        self.servers      = [s.copy() for s in BUILTIN_SERVERS]
+        self.servers      = [s.copy() for s in BUILTIN_SERVERS if not s.get("ipv6")]
         self._prepend_system_dns()
         self.results      = []
         self.prev_results: Optional[list] = None
         self.worker: Optional[BenchmarkWorker] = None
         self._checkboxes: list[tuple[dict, QCheckBox]] = []
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.timeout.connect(self._monitor_tick)
         self._build_ui()
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -729,10 +795,14 @@ class MainWindow(QMainWindow):
         vsplit = QSplitter(Qt.Orientation.Vertical)
         self.chart = DNSChart()
         vsplit.addWidget(self.chart)
+        self.ts_chart = TimeSeriesChart()
+        self.ts_chart.setVisible(False)
+        vsplit.addWidget(self.ts_chart)
         self.table = ResultsTable()
         vsplit.addWidget(self.table)
-        vsplit.setSizes([440, 260])
+        vsplit.setSizes([440, 0, 260])
         rl.addWidget(vsplit, stretch=1)
+        self._vsplit = vsplit
 
         # Bottom bar
         bot = QHBoxLayout()
@@ -759,6 +829,20 @@ class MainWindow(QMainWindow):
         self.history_btn.setFixedHeight(36)
         self.history_btn.clicked.connect(self._show_history)
         bot.addWidget(self.history_btn)
+
+        self.monitor_btn = QPushButton("Monitor")
+        self.monitor_btn.setFixedHeight(36)
+        self.monitor_btn.setCheckable(True)
+        self.monitor_btn.clicked.connect(self._toggle_monitor)
+        bot.addWidget(self.monitor_btn)
+
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(10, 3600)
+        self.interval_spin.setValue(60)
+        self.interval_spin.setSuffix(" s")
+        self.interval_spin.setFixedHeight(36)
+        self.interval_spin.setToolTip("Re-run interval when monitoring")
+        bot.addWidget(self.interval_spin)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -966,6 +1050,8 @@ class MainWindow(QMainWindow):
         show_icmp = self.ping_chk.isChecked()
         self.chart.update_chart(results, show_icmp, self.prev_results)
         _save_history(results)
+        if self._monitor_timer.isActive():
+            self.ts_chart.add_run(results, datetime.now().strftime("%H:%M:%S"))
         self.table.populate(results)
 
         ok = [r for r in results if r["status"] == "OK"]
@@ -990,6 +1076,28 @@ class MainWindow(QMainWindow):
         self.png_btn.setEnabled(bool(ok))
         self.progress.setVisible(False)
         self.status_bar.showMessage(msg)
+
+    def _toggle_monitor(self, checked: bool):
+        if checked:
+            self.ts_chart.clear_history()
+            self.ts_chart.setVisible(True)
+            self._vsplit.setSizes([300, 240, 160])
+            self.monitor_btn.setText("Stop Monitor")
+            self._monitor_timer.start(self.interval_spin.value() * 1000)
+            self._run()
+            self.status_bar.showMessage(
+                f"Monitoring — re-runs every {self.interval_spin.value()} s")
+        else:
+            self._monitor_timer.stop()
+            self.monitor_btn.setText("Monitor")
+            self.ts_chart.setVisible(False)
+            self._vsplit.setSizes([440, 0, 260])
+            self.status_bar.showMessage("Monitoring stopped")
+
+    def _monitor_tick(self):
+        if self.worker and self.worker.isRunning():
+            return
+        self._run()
 
     def _show_history(self):
         dlg = HistoryDialog(self)

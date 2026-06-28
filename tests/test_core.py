@@ -1,5 +1,5 @@
 """
-Unit tests for dns_benchmark.py core logic.
+Unit tests for the latensee library (no Qt dependency).
 
 Covers:
   - latency_grade() thresholds
@@ -10,20 +10,17 @@ Covers:
   - query_dns() timeout/error returns None
   - benchmark_one() result dict schema and loss calculation
 """
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import dns.resolver
 
-from dns_benchmark import (
-    query_dns,
+from latensee import (
+    BUILTIN_SERVERS,
+    benchmark_one,
     latency_grade,
     ms_color,
-    benchmark_one,
-    BUILTIN_SERVERS,
+    query_dns,
 )
 
 _SERVER = {"name": "Test", "ip": "1.1.1.1", "provider": "Cloudflare", "note": ""}
@@ -177,23 +174,23 @@ class TestBenchmarkOne(unittest.TestCase):
         "grade", "status",
     }
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", return_value=15.0)
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", return_value=15.0)
     def test_result_has_all_required_keys(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(self.REQUIRED_KEYS, set(result.keys()))
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", return_value=15.0)
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", return_value=15.0)
     def test_ok_status_when_queries_succeed(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["status"], "OK")
         self.assertEqual(result["loss_pct"], 0.0)
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", return_value=None)
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", return_value=None)
     def test_failed_status_when_all_queries_fail(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
@@ -201,23 +198,23 @@ class TestBenchmarkOne(unittest.TestCase):
         self.assertEqual(result["loss_pct"], 100.0)
         self.assertIsNone(result["avg_ms"])
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", side_effect=[15.0, None])
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", side_effect=[15.0, None])
     def test_partial_loss_calculated_correctly(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["loss_pct"], 50.0)
         self.assertEqual(result["status"], "OK")
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", return_value=15.0)
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", return_value=15.0)
     def test_grade_derived_from_avg_ms(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["grade"], latency_grade(result["avg_ms"]))
 
-    @patch("dns_benchmark.icmp_ping", return_value=None)
-    @patch("dns_benchmark.query_dns", return_value=15.0)
+    @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns", return_value=15.0)
     def test_server_metadata_preserved(self, _qd, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=1,
                                timeout=2.0, do_ping=False, do_doh=False)

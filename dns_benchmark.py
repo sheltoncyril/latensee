@@ -6,13 +6,8 @@ Build: pyinstaller --onefile --windowed dns_benchmark.py
 """
 
 import sys
-import re
-import time
 import json
-import platform
-import subprocess
 import ipaddress
-import statistics
 import concurrent.futures
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +15,11 @@ from typing import Optional
 
 import dns.resolver
 import pandas as pd
+
+from latensee import (
+    BUILTIN_SERVERS, DEFAULT_DOMAINS, DOH_ENDPOINTS,
+    query_dns, query_doh, icmp_ping, latency_grade, ms_color, benchmark_one,
+)
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -38,35 +38,7 @@ matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-BUILTIN_SERVERS = [
-    # ── IPv4 ──────────────────────────────────────────────────────────────────
-    {"name": "Cloudflare",      "ip": "1.1.1.1",                   "provider": "Cloudflare", "note": "Privacy-focused · fastest"},
-    {"name": "Cloudflare 2",    "ip": "1.0.0.1",                   "provider": "Cloudflare", "note": "Secondary"},
-    {"name": "Google",          "ip": "8.8.8.8",                   "provider": "Google",     "note": "Most widely used"},
-    {"name": "Google 2",        "ip": "8.8.4.4",                   "provider": "Google",     "note": "Secondary"},
-    {"name": "Quad9",           "ip": "9.9.9.9",                   "provider": "Quad9",      "note": "Malware blocking"},
-    {"name": "Quad9 2",         "ip": "149.112.112.112",           "provider": "Quad9",      "note": "Secondary"},
-    {"name": "OpenDNS",         "ip": "208.67.222.222",            "provider": "OpenDNS",    "note": "Phishing protection"},
-    {"name": "OpenDNS 2",       "ip": "208.67.220.220",            "provider": "OpenDNS",    "note": "Secondary"},
-    {"name": "AdGuard",         "ip": "94.140.14.14",              "provider": "AdGuard",    "note": "Ad & tracker blocking"},
-    {"name": "AdGuard 2",       "ip": "94.140.15.15",              "provider": "AdGuard",    "note": "Secondary"},
-    {"name": "Comodo",          "ip": "8.26.56.26",                "provider": "Comodo",     "note": "Security filtering"},
-    {"name": "Comodo 2",        "ip": "8.20.247.20",               "provider": "Comodo",     "note": "Secondary"},
-    {"name": "Level3",          "ip": "4.2.2.1",                   "provider": "Level3",     "note": "ISP-grade"},
-    {"name": "Verisign",        "ip": "64.6.64.6",                 "provider": "Verisign",   "note": "No filtering"},
-    {"name": "NextDNS",         "ip": "45.90.28.0",                "provider": "NextDNS",    "note": "Customizable filtering"},
-    # ── IPv6 ──────────────────────────────────────────────────────────────────
-    {"name": "Cloudflare v6",   "ip": "2606:4700:4700::1111",      "provider": "Cloudflare", "note": "IPv6 · primary",   "ipv6": True},
-    {"name": "Cloudflare v6 2", "ip": "2606:4700:4700::1001",      "provider": "Cloudflare", "note": "IPv6 · secondary", "ipv6": True},
-    {"name": "Google v6",       "ip": "2001:4860:4860::8888",      "provider": "Google",     "note": "IPv6 · primary",   "ipv6": True},
-    {"name": "Google v6 2",     "ip": "2001:4860:4860::8844",      "provider": "Google",     "note": "IPv6 · secondary", "ipv6": True},
-    {"name": "Quad9 v6",        "ip": "2620:fe::fe",               "provider": "Quad9",      "note": "IPv6 · primary",   "ipv6": True},
-    {"name": "AdGuard v6",      "ip": "2a10:50c0::ad1:ff",         "provider": "AdGuard",    "note": "IPv6 · primary",   "ipv6": True},
-]
-
-DEFAULT_DOMAINS = ["google.com", "cloudflare.com", "github.com", "amazon.com", "youtube.com"]
-
+# ── UI constants ──────────────────────────────────────────────────────────────
 PROVIDER_COLORS = {
     "Cloudflare": "#f6821f", "Google":   "#4285f4", "Quad9":    "#7c3aed",
     "OpenDNS":    "#0097d9", "AdGuard":  "#5fb955", "Comodo":   "#c9303e",
@@ -78,17 +50,6 @@ PROVIDER_COLORS = {
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
 
 TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "DoH ms", "Grade", "Status"]
-
-DOH_ENDPOINTS = {
-    "1.1.1.1":         "https://1.1.1.1/dns-query",
-    "1.0.0.1":         "https://1.0.0.1/dns-query",
-    "8.8.8.8":         "https://dns.google/dns-query",
-    "8.8.4.4":         "https://dns.google/dns-query",
-    "9.9.9.9":         "https://dns.quad9.net/dns-query",
-    "149.112.112.112": "https://dns.quad9.net/dns-query",
-    "94.140.14.14":    "https://dns.adguard-dns.com/dns-query",
-    "94.140.15.15":    "https://dns.adguard-dns.com/dns-query",
-}
 
 HISTORY_FILE = Path.home() / ".latensee" / "history.json"
 HISTORY_MAX  = 20
@@ -188,117 +149,6 @@ def apply_dark_theme(app: QApplication) -> None:
         QScrollArea {{ border: none; background: transparent; }}
         QScrollArea > QWidget > QWidget {{ background: transparent; }}
     """)
-
-# ── DNS core ──────────────────────────────────────────────────────────────────
-def query_dns(ip: str, domain: str, timeout: float) -> Optional[float]:
-    r = dns.resolver.Resolver(configure=False)
-    r.nameservers = [ip]
-    r.timeout = timeout
-    r.lifetime = timeout
-    t0 = time.perf_counter()
-    try:
-        r.resolve(domain, "A")
-    except dns.resolver.NXDOMAIN:
-        pass  # resolver answered — NXDOMAIN still counts as valid latency sample
-    except Exception:
-        return None
-    return (time.perf_counter() - t0) * 1000
-
-
-def query_doh(ip: str, domain: str, timeout: float) -> Optional[float]:
-    url = DOH_ENDPOINTS.get(ip)
-    if url is None:
-        return None
-    import urllib.request
-    import struct
-    # Minimal DNS wire-format query for <domain> A record
-    def _encode_name(name: str) -> bytes:
-        parts = name.rstrip(".").split(".")
-        return b"".join(bytes([len(p)]) + p.encode() for p in parts) + b"\x00"
-    qname = _encode_name(domain)
-    wire  = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
-    req = urllib.request.Request(
-        f"{url}?dns=" + __import__("base64").urlsafe_b64encode(wire).rstrip(b"=").decode(),
-        headers={"Accept": "application/dns-message"},
-    )
-    try:
-        t0 = time.perf_counter()
-        with urllib.request.urlopen(req, timeout=timeout):
-            return (time.perf_counter() - t0) * 1000
-    except Exception:
-        return None
-
-
-def icmp_ping(ip: str) -> Optional[float]:
-    is_v6 = ":" in ip
-    if platform.system() == "Windows":
-        flag = ["-6"] if is_v6 else []
-        cmd, pattern = ["ping"] + flag + ["-n", "4", "-w", "2000", ip], r"Average\s*=\s*(\d+)ms"
-    else:
-        cmd_name = "ping6" if is_v6 else "ping"
-        cmd, pattern = [cmd_name, "-c", "4", "-W", "2", ip], r"\d+\.?\d*/(\d+\.?\d*)/\d+\.?\d*"
-    try:
-        kwargs: dict = {"stderr": subprocess.DEVNULL, "text": True, "timeout": 15}
-        if platform.system() == "Windows":
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = subprocess.SW_HIDE
-            kwargs["startupinfo"] = si
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        out = subprocess.check_output(cmd, **kwargs)
-        m = re.search(pattern, out)
-        return round(float(m.group(1)), 1) if m else None
-    except Exception:
-        return None
-
-
-def latency_grade(ms: Optional[float]) -> str:
-    if ms is None: return "F"
-    if ms < 20:    return "A"
-    if ms < 50:    return "B"
-    if ms < 100:   return "C"
-    if ms < 200:   return "D"
-    return "F"
-
-
-def ms_color(ms: Optional[float]) -> str:
-    if ms is None:  return "#f87171"
-    if ms < 20:     return "#4ade80"
-    if ms < 50:     return "#a3e635"
-    if ms < 100:    return "#fbbf24"
-    if ms < 200:    return "#f97316"
-    return "#f87171"
-
-
-def benchmark_one(server: dict, domains: list, n: int, timeout: float,
-                  do_ping: bool, do_doh: bool = False) -> dict:
-    times, fail = [], 0
-    for domain in domains:
-        for _ in range(n):
-            ms = query_dns(server["ip"], domain, timeout)
-            if ms is not None:
-                times.append(ms)
-            else:
-                fail += 1
-    total   = len(domains) * n
-    ping_ms = icmp_ping(server["ip"]) if do_ping else None
-    doh_ms  = query_doh(server["ip"], domains[0], timeout) if do_doh else None
-    avg     = round(sum(times) / len(times), 1) if times else None
-    jitter  = round(statistics.stdev(times), 1) if len(times) >= 2 else None
-    return {
-        "name":      server["name"],
-        "ip":        server["ip"],
-        "provider":  server["provider"],
-        "min_ms":    round(min(times), 1) if times else None,
-        "avg_ms":    avg,
-        "max_ms":    round(max(times), 1) if times else None,
-        "jitter_ms": jitter,
-        "loss_pct":  round(fail / total * 100, 1),
-        "icmp_ms":   round(ping_ms, 1) if ping_ms is not None else None,
-        "doh_ms":    round(doh_ms, 1) if doh_ms is not None else None,
-        "grade":     latency_grade(avg),
-        "status":    "OK" if times else "FAILED",
-    }
 
 # ── Background worker ─────────────────────────────────────────────────────────
 class BenchmarkWorker(QThread):
@@ -813,6 +663,12 @@ class MainWindow(QMainWindow):
         self.run_btn.clicked.connect(self._run)
         bot.addWidget(self.run_btn)
 
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setFixedHeight(36)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop)
+        bot.addWidget(self.stop_btn)
+
         self.export_btn = QPushButton("Export CSV")
         self.export_btn.setFixedHeight(36)
         self.export_btn.setEnabled(False)
@@ -988,6 +844,18 @@ class MainWindow(QMainWindow):
                 row = c.parent()
                 self._remove_server(s, row, c)
 
+    def _stop(self):
+        if self.worker and self.worker.isRunning():
+            self._monitor_timer.stop()
+            if self.monitor_btn.isChecked():
+                self.monitor_btn.setChecked(False)
+                self.monitor_btn.setText("Monitor")
+                self.ts_chart.setVisible(False)
+                self._vsplit.setSizes([440, 0, 260])
+            self.worker.stop()
+            self.stop_btn.setEnabled(False)
+            self.status_bar.showMessage("Stopping…")
+
     # ── Benchmark flow ────────────────────────────────────────────────────────
     def _run(self):
         import uuid
@@ -1008,6 +876,7 @@ class MainWindow(QMainWindow):
 
         self.results = []
         self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.export_btn.setEnabled(False)
         self.png_btn.setEnabled(False)
         self.progress.setValue(0)
@@ -1072,6 +941,7 @@ class MainWindow(QMainWindow):
             msg = "Done — all servers failed. Check your connection or increase timeout."
 
         self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.export_btn.setEnabled(bool(ok))
         self.png_btn.setEnabled(bool(ok))
         self.progress.setVisible(False)

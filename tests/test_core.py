@@ -169,29 +169,32 @@ class TestQueryDns(unittest.TestCase):
 class TestBenchmarkOne(unittest.TestCase):
     REQUIRED_KEYS = {
         "name", "ip", "provider",
-        "min_ms", "avg_ms", "max_ms", "jitter_ms",
+        "min_ms", "avg_ms", "max_ms", "jitter_ms", "p95_ms",
         "loss_pct", "icmp_ms", "doh_ms",
-        "grade", "status",
+        "grade", "status", "resolved_ips",
     }
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", return_value=15.0)
-    def test_result_has_all_required_keys(self, _qd, _ping):
+    def test_result_has_all_required_keys(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(self.REQUIRED_KEYS, set(result.keys()))
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", return_value=15.0)
-    def test_ok_status_when_queries_succeed(self, _qd, _ping):
+    def test_ok_status_when_queries_succeed(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["status"], "OK")
         self.assertEqual(result["loss_pct"], 0.0)
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", return_value=None)
-    def test_failed_status_when_all_queries_fail(self, _qd, _ping):
+    def test_failed_status_when_all_queries_fail(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["status"], "FAILED")
@@ -199,23 +202,26 @@ class TestBenchmarkOne(unittest.TestCase):
         self.assertIsNone(result["avg_ms"])
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", side_effect=[15.0, None])
-    def test_partial_loss_calculated_correctly(self, _qd, _ping):
+    def test_partial_loss_calculated_correctly(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["loss_pct"], 50.0)
         self.assertEqual(result["status"], "OK")
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", return_value=15.0)
-    def test_grade_derived_from_avg_ms(self, _qd, _ping):
+    def test_grade_derived_from_avg_ms(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=2,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["grade"], latency_grade(result["avg_ms"]))
 
     @patch("latensee.core.icmp_ping", return_value=None)
+    @patch("latensee.core.query_dns_ips", return_value=[])
     @patch("latensee.core.query_dns", return_value=15.0)
-    def test_server_metadata_preserved(self, _qd, _ping):
+    def test_server_metadata_preserved(self, _qd, _ips, _ping):
         result = benchmark_one(_SERVER, domains=["example.com"], n=1,
                                timeout=2.0, do_ping=False, do_doh=False)
         self.assertEqual(result["name"], _SERVER["name"])

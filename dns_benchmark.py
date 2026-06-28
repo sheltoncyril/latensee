@@ -102,7 +102,7 @@ PROVIDER_COLORS = {
 
 GRADE_COLORS = {"A": "#4ade80", "B": "#a3e635", "C": "#fbbf24", "D": "#f97316", "F": "#f87171"}
 
-TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "Loss %", "ICMP ms", "DoH ms", "Grade", "Status"]
+TABLE_COLS = ["Name", "IP", "Provider", "Min ms", "Avg ms", "Max ms", "Jitter ms", "P95 ms", "Loss %", "ICMP ms", "DoH ms", "Grade", "Status"]
 
 HISTORY_FILE = Path.home() / ".latensee" / "history.json"
 HISTORY_MAX  = 20
@@ -402,6 +402,28 @@ class ResultsTable(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.setFont(QFont("Consolas", 9))
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context_menu)
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._copy_selection)
+
+    def _copy_selection(self):
+        rows = sorted({i.row() for i in self.selectedItems()})
+        if not rows:
+            return
+        header = "\t".join(TABLE_COLS)
+        lines = [header]
+        for row in rows:
+            lines.append("\t".join(
+                self.item(row, col).text() if self.item(row, col) else ""
+                for col in range(len(TABLE_COLS))
+            ))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _context_menu(self, pos):
+        menu = QMenu(self)
+        copy_act = menu.addAction("Copy row(s)  Ctrl+C")
+        copy_act.triggered.connect(self._copy_selection)
+        menu.exec(self.viewport().mapToGlobal(pos))
 
     def populate(self, results: list) -> None:
         self.setSortingEnabled(False)
@@ -430,37 +452,49 @@ class ResultsTable(QTableWidget):
                 it.setForeground(QBrush(QColor(ms_color(jitter))))
             self.setItem(row, 6, it)
 
+            p95 = r.get("p95_ms")
+            it = cell(f"{p95:.1f}" if p95 is not None else "—")
+            if p95 is not None:
+                it.setForeground(QBrush(QColor(ms_color(p95))))
+            self.setItem(row, 7, it)
+
             loss = r["loss_pct"]
             it = cell(f"{loss:.1f}%")
             it.setForeground(QBrush(QColor(
                 "#4ade80" if loss == 0 else "#fbbf24" if loss < 10 else "#f87171"
             )))
-            self.setItem(row, 7, it)
+            self.setItem(row, 8, it)
 
             icmp = r.get("icmp_ms")
             it = cell(f"{icmp:.1f}" if icmp is not None else "—")
             if icmp is not None:
                 it.setForeground(QBrush(QColor(ms_color(icmp))))
-            self.setItem(row, 8, it)
+            self.setItem(row, 9, it)
 
             doh = r.get("doh_ms")
             it = cell(f"{doh:.1f}" if doh is not None else "—")
             if doh is not None:
                 it.setForeground(QBrush(QColor(ms_color(doh))))
-            self.setItem(row, 9, it)
+            self.setItem(row, 10, it)
 
             grade = r["grade"]
-            it = cell(grade)
-            it.setForeground(QBrush(QColor(GRADE_COLORS.get(grade, "#888"))))
+            warn  = r.get("_dns_mismatch", False)
+            grade_text = f"⚠ {grade}" if warn else grade
+            it = cell(grade_text)
+            it.setForeground(QBrush(QColor(
+                "#f97316" if warn else GRADE_COLORS.get(grade, "#888")
+            )))
+            if warn:
+                it.setToolTip(r.get("_mismatch_detail", "Resolved IPs differ from majority"))
             font = QFont("Consolas", 9)
             font.setBold(True)
             it.setFont(font)
-            self.setItem(row, 10, it)
+            self.setItem(row, 11, it)
 
             status = r["status"]
             it = cell(status)
             it.setForeground(QBrush(QColor("#4ade80" if status == "OK" else "#f87171")))
-            self.setItem(row, 11, it)
+            self.setItem(row, 12, it)
 
         self.setSortingEnabled(True)
         self.sortItems(4, Qt.SortOrder.AscendingOrder)
@@ -498,6 +532,47 @@ class AddServerDialog(QDialog):
         ip = self.ip_edit.text().strip()
         return {"name": self.name_edit.text().strip() or ip,
                 "ip": ip, "provider": "Custom", "note": ""}
+
+# ── Response validation ───────────────────────────────────────────────────────
+def _flag_dns_mismatches(results: list) -> None:
+    """Annotate results in-place with _dns_mismatch=True when a resolver returns
+    different A-record IPs than the majority for the same domain.
+
+    Works by majority vote per domain: if ≥50% of resolvers agree on a set of
+    IPs, any resolver that returns a different set is flagged.
+    """
+    # Collect all resolved IPs per domain across all servers
+    domains: set[str] = set()
+    for r in results:
+        domains.update(r.get("resolved_ips", {}).keys())
+
+    for domain in domains:
+        # Map: frozenset(ips) -> count
+        vote: dict = {}
+        for r in results:
+            ips = r.get("resolved_ips", {}).get(domain)
+            if ips:
+                key = frozenset(ips)
+                vote[key] = vote.get(key, 0) + 1
+
+        if not vote:
+            continue
+
+        majority_ips = max(vote, key=lambda k: vote[k])
+        # Only flag if majority is clear (>= half of voters)
+        total_votes = sum(vote.values())
+        if vote[majority_ips] <= total_votes / 2:
+            continue
+
+        for r in results:
+            ips = r.get("resolved_ips", {}).get(domain)
+            if ips and frozenset(ips) != majority_ips:
+                r["_dns_mismatch"] = True
+                majority_str = ", ".join(sorted(majority_ips))
+                actual_str   = ", ".join(sorted(ips))
+                r["_mismatch_detail"] = (
+                    f"{domain}: majority={majority_str} | this={actual_str}"
+                )
 
 # ── History helpers ───────────────────────────────────────────────────────────
 def _load_history() -> list:
@@ -968,6 +1043,7 @@ class MainWindow(QMainWindow):
         self.chart.update_chart(partial, self.ping_chk.isChecked(), self.prev_results)
 
     def _on_all_done(self, results: list):
+        _flag_dns_mismatches(results)
         self.results = results
         show_icmp = self.ping_chk.isChecked()
         self.chart.update_chart(results, show_icmp, self.prev_results)

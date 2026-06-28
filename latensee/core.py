@@ -35,6 +35,19 @@ def query_dns(ip: str, domain: str, timeout: float) -> Optional[float]:
     return (time.perf_counter() - t0) * 1000
 
 
+def query_dns_ips(ip: str, domain: str, timeout: float) -> list[str]:
+    """Return the list of A-record IPs a resolver gives for domain, or []."""
+    r = dns.resolver.Resolver(configure=False)
+    r.nameservers = [ip]
+    r.timeout = timeout
+    r.lifetime = timeout
+    try:
+        answers = r.resolve(domain, "A")
+        return sorted(str(a) for a in answers)
+    except Exception:
+        return []
+
+
 def query_doh(ip: str, domain: str, timeout: float) -> Optional[float]:
     """Query via DNS-over-HTTPS and return round-trip time in ms, or None."""
     url = DOH_ENDPOINTS.get(ip)
@@ -106,6 +119,14 @@ def ms_color(ms: Optional[float]) -> str:
     return "#f87171"
 
 
+def _percentile(data: list[float], pct: int) -> Optional[float]:
+    """Return the pct-th percentile of data, or None if fewer than 10 samples."""
+    if len(data) < 10:
+        return None
+    qs = statistics.quantiles(sorted(data), n=100)
+    return round(qs[pct - 1], 1)
+
+
 def benchmark_one(
     server: dict,
     domains: list[str],
@@ -117,10 +138,12 @@ def benchmark_one(
     """Run all DNS queries for one server and return a result dict.
 
     Result keys: name, ip, provider, min_ms, avg_ms, max_ms, jitter_ms,
-                 loss_pct, icmp_ms, doh_ms, grade, status.
+                 p95_ms, loss_pct, icmp_ms, doh_ms, grade, status,
+                 resolved_ips.
     """
     times: list[float] = []
     fail = 0
+    resolved_ips: dict[str, list[str]] = {}
     for domain in domains:
         for _ in range(n):
             ms = query_dns(server["ip"], domain, timeout)
@@ -128,22 +151,28 @@ def benchmark_one(
                 times.append(ms)
             else:
                 fail += 1
+        # Capture resolved IPs once per domain (first successful query)
+        ips = query_dns_ips(server["ip"], domain, timeout)
+        if ips:
+            resolved_ips[domain] = ips
     total   = len(domains) * n
     ping_ms = icmp_ping(server["ip"]) if do_ping else None
     doh_ms  = query_doh(server["ip"], domains[0], timeout) if do_doh else None
     avg     = round(sum(times) / len(times), 1) if times else None
     jitter  = round(statistics.stdev(times), 1) if len(times) >= 2 else None
     return {
-        "name":      server["name"],
-        "ip":        server["ip"],
-        "provider":  server["provider"],
-        "min_ms":    round(min(times), 1) if times else None,
-        "avg_ms":    avg,
-        "max_ms":    round(max(times), 1) if times else None,
-        "jitter_ms": jitter,
-        "loss_pct":  round(fail / total * 100, 1),
-        "icmp_ms":   round(ping_ms, 1) if ping_ms is not None else None,
-        "doh_ms":    round(doh_ms, 1) if doh_ms is not None else None,
-        "grade":     latency_grade(avg),
-        "status":    "OK" if times else "FAILED",
+        "name":         server["name"],
+        "ip":           server["ip"],
+        "provider":     server["provider"],
+        "min_ms":       round(min(times), 1) if times else None,
+        "avg_ms":       avg,
+        "max_ms":       round(max(times), 1) if times else None,
+        "jitter_ms":    jitter,
+        "p95_ms":       _percentile(times, 95),
+        "loss_pct":     round(fail / total * 100, 1),
+        "icmp_ms":      round(ping_ms, 1) if ping_ms is not None else None,
+        "doh_ms":       round(doh_ms, 1) if doh_ms is not None else None,
+        "grade":        latency_grade(avg),
+        "status":       "OK" if times else "FAILED",
+        "resolved_ips": resolved_ips,
     }

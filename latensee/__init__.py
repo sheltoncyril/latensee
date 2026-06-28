@@ -6,6 +6,7 @@ from .core import (
     latency_grade,
     ms_color,
     query_dns,
+    query_dns_ips,
     query_doh,
 )
 from .servers import BUILTIN_SERVERS, DEFAULT_DOMAINS, DOH_ENDPOINTS
@@ -15,6 +16,7 @@ __all__ = [
     "DEFAULT_DOMAINS",
     "DOH_ENDPOINTS",
     "query_dns",
+    "query_dns_ips",
     "query_doh",
     "icmp_ping",
     "latency_grade",
